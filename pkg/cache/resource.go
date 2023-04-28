@@ -27,6 +27,8 @@ type Resource struct {
 
 	// answers if resource is inferred parent of provided resource
 	isInferredParentOf func(key kube.ResourceKey) bool
+	// answers if this resource might have inferred parents in given namespace
+	inferredParentNS map[string]bool
 }
 
 func (r *Resource) ResourceKey() kube.ResourceKey {

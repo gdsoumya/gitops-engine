@@ -208,6 +208,10 @@ type clusterCache struct {
 	eventHandlers               map[uint64]OnEventHandler
 	openAPISchema               openapi.Resources
 	gvkParser                   *managedfields.GvkParser
+
+	// custom owner reference helpers
+	CustomInferredParentOfMap      map[schema.GroupVersionKind]func(un *unstructured.Unstructured) ([]metav1.OwnerReference, func(kube.ResourceKey) bool)
+	CheckIfResourceMightHaveParent func(un *unstructured.Unstructured) map[string]bool
 }
 
 type clusterCacheSync struct {
@@ -355,6 +359,11 @@ func (c *clusterCache) replaceResourceCache(gk schema.GroupKind, resources []*Re
 func (c *clusterCache) newResource(un *unstructured.Unstructured) *Resource {
 	ownerRefs, isInferredParentOf := c.resolveResourceReferences(un)
 
+	// has more precedence over default
+	if fn, ok := c.CustomInferredParentOfMap[un.GroupVersionKind()]; ok && fn != nil {
+		ownerRefs, isInferredParentOf = fn(un)
+	}
+
 	cacheManifest := false
 	var info interface{}
 	if c.populateResourceInfoHandler != nil {
@@ -365,6 +374,12 @@ func (c *clusterCache) newResource(un *unstructured.Unstructured) *Resource {
 	if !ct.IsZero() {
 		creationTimestamp = &ct
 	}
+
+	inferredParentNS := mightHaveInferredOwner(un)
+	if c.CheckIfResourceMightHaveParent != nil {
+		ns := c.CheckIfResourceMightHaveParent(un)
+		inferredParentNS = mergeMaps(inferredParentNS, ns)
+	}
 	resource := &Resource{
 		ResourceVersion:    un.GetResourceVersion(),
 		Ref:                kube.GetObjectRef(un),
@@ -372,12 +387,24 @@ func (c *clusterCache) newResource(un *unstructured.Unstructured) *Resource {
 		Info:               info,
 		CreationTimestamp:  creationTimestamp,
 		isInferredParentOf: isInferredParentOf,
+		inferredParentNS:   inferredParentNS,
 	}
 	if cacheManifest {
 		resource.Resource = un
 	}
 
 	return resource
+}
+
+func mergeMaps(m1 map[string]bool, m2 map[string]bool) map[string]bool {
+	finalMap := map[string]bool{}
+	for k, v := range m1 {
+		finalMap[k] = v
+	}
+	for k, v := range m2 {
+		finalMap[k] = v
+	}
+	return finalMap
 }
 
 func (c *clusterCache) setNode(n *Resource) {
@@ -391,14 +418,29 @@ func (c *clusterCache) setNode(n *Resource) {
 	ns[key] = n
 
 	// update inferred parent references
-	if n.isInferredParentOf != nil || mightHaveInferredOwner(n) {
+	if n.isInferredParentOf != nil {
 		for k, v := range ns {
 			// update child resource owner references
-			if n.isInferredParentOf != nil && mightHaveInferredOwner(v) {
+			if n.isInferredParentOf != nil && v.inferredParentNS != nil && v.inferredParentNS[key.Namespace] {
 				v.setOwnerRef(n.toOwnerRef(), n.isInferredParentOf(k))
 			}
-			if mightHaveInferredOwner(n) && v.isInferredParentOf != nil {
-				n.setOwnerRef(v.toOwnerRef(), v.isInferredParentOf(n.ResourceKey()))
+
+		}
+	}
+
+	if len(n.inferredParentNS) > 0 {
+		for namespace, _ := range n.inferredParentNS {
+			nsRes, ok := c.nsIndex[namespace]
+			// if namespace resources not found skip
+			if !ok {
+				continue
+			}
+			for _, v := range nsRes {
+				// update child resource owner references
+				if v.isInferredParentOf != nil {
+					n.setOwnerRef(v.toOwnerRef(), v.isInferredParentOf(n.ResourceKey()))
+				}
+
 			}
 		}
 	}
@@ -1035,7 +1077,7 @@ func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
 			// remove ownership references from children with inferred references
 			if existing.isInferredParentOf != nil {
 				for k, v := range ns {
-					if mightHaveInferredOwner(v) && existing.isInferredParentOf(k) {
+					if v.inferredParentNS != nil && v.inferredParentNS[key.Namespace] && existing.isInferredParentOf(k) {
 						v.setOwnerRef(existing.toOwnerRef(), false)
 					}
 				}

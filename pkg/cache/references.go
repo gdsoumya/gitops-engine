@@ -5,17 +5,19 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/argoproj/gitops-engine/pkg/utils/kube"
 	v1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
-
-	"github.com/argoproj/gitops-engine/pkg/utils/kube"
 )
 
-// mightHaveInferredOwner returns true of given resource might have inferred owners
-func mightHaveInferredOwner(r *Resource) bool {
-	return r.Ref.GroupVersionKind().Group == "" && r.Ref.Kind == kube.PersistentVolumeClaimKind
+// mightHaveInferredOwner returns namespace where the given resource might have inferred owners, returns empty string otherwise
+func mightHaveInferredOwner(r *unstructured.Unstructured) map[string]bool {
+	if r.GroupVersionKind().Group == "" && r.GroupVersionKind().Kind == kube.PersistentVolumeClaimKind {
+		return map[string]bool{r.GetNamespace(): true}
+	}
+	return nil
 }
 
 func (c *clusterCache) resolveResourceReferences(un *unstructured.Unstructured) ([]metav1.OwnerReference, func(kube.ResourceKey) bool) {

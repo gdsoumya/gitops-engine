@@ -3,13 +3,14 @@ package cache
 import (
 	"time"
 
-	"github.com/go-logr/logr"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/client-go/rest"
-
 	"github.com/argoproj/gitops-engine/pkg/health"
 	"github.com/argoproj/gitops-engine/pkg/utils/kube"
 	"github.com/argoproj/gitops-engine/pkg/utils/tracing"
+	"github.com/go-logr/logr"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/rest"
 )
 
 // NewNoopSettings returns cache settings that has not health customizations and don't filter any resources
@@ -42,6 +43,14 @@ type UpdateSettingsFunc func(cache *clusterCache)
 func SetKubectl(kubectl kube.Kubectl) UpdateSettingsFunc {
 	return func(cache *clusterCache) {
 		cache.kubectl = kubectl
+	}
+}
+
+// SetCustomOwnerRefHelper allows to override custom owner reference helpers
+func SetCustomOwnerRefHelper(inferredParentOfMap map[schema.GroupVersionKind]func(un *unstructured.Unstructured) ([]metav1.OwnerReference, func(kube.ResourceKey) bool), checkIfResourceMightHaveParent func(un *unstructured.Unstructured) map[string]bool) UpdateSettingsFunc {
+	return func(cache *clusterCache) {
+		cache.CustomInferredParentOfMap = inferredParentOfMap
+		cache.CheckIfResourceMightHaveParent = checkIfResourceMightHaveParent
 	}
 }
 
